@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpS
 use nix::unistd::sethostname;
 
 use gethostname::gethostname;
+use libc::setsockopt as _setsockopt;
 
 use byteorder::{BigEndian, ByteOrder};
 
@@ -55,6 +56,54 @@ impl TryFromObject for SocketKind {
             1 => Ok(SocketKind::Stream),
             2 => Ok(SocketKind::Dgram),
             value => Err(vm.new_os_error(format!("Unknown socket kind value: {}", value))),
+        }
+    }
+}
+
+static SOL_SOCKET: i32 = 0xffff;
+
+#[derive(Debug, Copy, Clone)]
+enum SocketOption {
+    Debug = 0x0001,
+    AcceptConn = 0x0002,
+    ReuseAddr = 0x0004,
+    KeepAlive = 0x0008,
+    DontRoute = 0x0010,
+    Broadcast = 0x0020,
+    UseLoopback = 0x0040,
+    Linger = 0x0080,
+    OobInline = 0x0100,
+    SndBuf = 0x1001,
+    RcvBuf = 0x1002,
+    SndLoWat = 0x1003,
+    RcvLoWat = 0x1004,
+    SndTimeo = 0x1005,
+    RcvTimeo = 0x1006,
+    Error = 0x1007,
+    Type = 0x1008,
+}
+
+impl TryFromObject for SocketOption {
+    fn try_from_object(vm: &VirtualMachine, obj: PyObjectRef) -> PyResult<Self> {
+        match i32::try_from_object(vm, obj)? {
+            0x0001 => Ok(SocketOption::Debug),
+            0x0002 => Ok(SocketOption::AcceptConn),
+            0x0004 => Ok(SocketOption::ReuseAddr),
+            0x0008 => Ok(SocketOption::KeepAlive),
+            0x0010 => Ok(SocketOption::DontRoute),
+            0x0020 => Ok(SocketOption::Broadcast),
+            0x0040 => Ok(SocketOption::UseLoopback),
+            0x0080 => Ok(SocketOption::Linger),
+            0x0100 => Ok(SocketOption::OobInline),
+            0x1001 => Ok(SocketOption::SndBuf),
+            0x1002 => Ok(SocketOption::RcvBuf),
+            0x1003 => Ok(SocketOption::SndLoWat),
+            0x1004 => Ok(SocketOption::RcvLoWat),
+            0x1005 => Ok(SocketOption::SndTimeo),
+            0x1006 => Ok(SocketOption::RcvTimeo),
+            0x1007 => Ok(SocketOption::Error),
+            0x1008 => Ok(SocketOption::Type),
+            value => Err(vm.new_os_error(format!("Unknown socket option value: {}", value))),
         }
     }
 }
@@ -352,6 +401,28 @@ impl SocketRef {
             Err(s) => Err(vm.new_os_error(s.to_string())),
         }
     }
+
+    fn setsockopt(
+        self,
+        level: i32,
+        optname: SocketOption,
+        value: i32,
+        vm: &VirtualMachine,
+    ) -> PyResult {
+        let return_code = unsafe {
+            _setsockopt(
+                self.as_raw_fd(),
+                level,
+                optname as i32,
+                value as *mut libc::c_void,
+                1,
+            )
+        };
+        if return_code != 0 {
+            return Err(vm.new_os_error("return code is not zero".to_string()));
+        }
+        Ok(vm.ctx.new_int(return_code))
+    }
 }
 
 struct Address {
@@ -448,6 +519,7 @@ pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
         "sendto" => ctx.new_rustfunc(SocketRef::sendto),
         "recvfrom" => ctx.new_rustfunc(SocketRef::recvfrom),
         "fileno" => ctx.new_rustfunc(SocketRef::fileno),
+        "setsockopt" => ctx.new_rustfunc(SocketRef::setsockopt),
     });
 
     let module = py_module!(vm, "socket", {
@@ -455,6 +527,8 @@ pub fn make_module(vm: &VirtualMachine) -> PyObjectRef {
         "SOCK_STREAM" => ctx.new_int(SocketKind::Stream as i32),
         "SOCK_DGRAM" => ctx.new_int(SocketKind::Dgram as i32),
         "socket" => socket,
+        "SOL_SOCKET" => ctx.new_int(SOL_SOCKET as i32),
+        "SO_REUSEADDR" => ctx.new_int(SocketOption::ReuseAddr as i32),
         "inet_aton" => ctx.new_rustfunc(socket_inet_aton),
         "inet_ntoa" => ctx.new_rustfunc(socket_inet_ntoa),
         "gethostname" => ctx.new_rustfunc(socket_gethostname),
